@@ -33,6 +33,22 @@ const TOKENS: Record<string, { symbol: string; mint: string; decimals: number }>
 
 const WHALE_THRESHOLD = 10000; // SOL
 
+// Pyth Price Feed IDs (Mainnet)
+const PYTH_FEEDS: Record<string, { id: string; pair: string }> = {
+  'SOL/USD': { id: 'ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d', pair: 'SOL/USD' },
+  'BTC/USD': { id: 'e62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43', pair: 'BTC/USD' },
+  'ETH/USD': { id: 'ff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace', pair: 'ETH/USD' },
+  'USDC/USD': { id: 'eaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a', pair: 'USDC/USD' },
+  'JUP/USD': { id: '0a0408d619e9380abad35060f9192039ed5042fa6f82301d0e48bb52be830996', pair: 'JUP/USD' },
+  'BONK/USD': { id: '72b021217ca3fe68922a19aaf990109cb9d84e9ad004b4d2025ad6f529314419', pair: 'BONK/USD' },
+  'WIF/USD': { id: '4ca4beeca86f0d164160323817a4e42b10010a724c2217c6ee41b54cd4cc61fc', pair: 'WIF/USD' },
+  'RAY/USD': { id: '91568baa8beb53db23eb3fb7f22c6e8bd303d103919e19733f2bb642d3e7987a', pair: 'RAY/USD' },
+  'ORCA/USD': { id: '37505261e557e251290b8c8899453064e8d760ed5c65167e9b7f156ef2b75714', pair: 'ORCA/USD' }
+};
+
+// Metaplex Token Metadata Program
+const TOKEN_METADATA_PROGRAM = 'metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s';
+
 // CORS headers
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -57,7 +73,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.json({
         status: 'healthy',
         service: 'solanascope',
-        version: '0.2.0',
+        version: '0.3.0',
         features: ['protocols', 'wallets', 'network', 'quotes', 'whales', 'anomalies'],
         endpoints: [
           'GET /health',
@@ -71,6 +87,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           'GET /quote?from=SOL&to=USDC&amount=1',
           'GET /whales/recent',
           'POST /detect/anomaly',
+          'GET /prices - Pyth oracle prices',
+          'GET /price/:pair - Single price feed (SOL/USD, BTC/USD, etc)',
+          'GET /token/:mint/metadata - Token metadata from Metaplex',
           'GET /skill.md'
         ],
         timestamp: new Date().toISOString()
@@ -82,8 +101,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       res.setHeader('Content-Type', 'text/markdown');
       return res.send(`---
 name: solanascope
-version: 0.2.0
-description: Real-time Solana intelligence API for AI agents. Protocol health, wallet analysis, swap quotes, whale alerts, anomaly detection.
+version: 0.3.0
+description: Real-time Solana intelligence API for AI agents. Pyth oracle prices, protocol health, wallet analysis, token metadata, swap quotes, whale alerts, anomaly detection.
 homepage: https://github.com/openclaw-bit/solanascope
 api_base: https://solanascope.vercel.app
 ---
@@ -98,12 +117,19 @@ Real-time Solana intelligence for AI agents. No UI, pure APIs.
 - \`GET /health\` — Service status and endpoint list
 - \`GET /skill.md\` — This file (agent discovery)
 
+### 📊 Price Feeds (Pyth Oracle)
+- \`GET /prices\` — All available prices from Pyth oracle
+- \`GET /price/:pair\` — Single price (SOL/USD, BTC/USD, ETH/USD, JUP/USD, BONK/USD, WIF/USD, RAY/USD, ORCA/USD)
+
+### 🪙 Token Intelligence
+- \`GET /token/:mint/metadata\` — Full token metadata (name, symbol, image, supply, decimals)
+
 ### Protocol Intelligence
 - \`GET /protocols\` — List all tracked protocols
 - \`GET /protocols/:id/health\` — Check if protocol is active (jupiter, raydium, kamino, drift, orca, meteora)
 
 ### Network Stats
-- \`GET /network/stats\` — Current slot, epoch, supply
+- \`GET /network/stats\` — Current slot, epoch, TPS, supply
 
 ### Wallet Analysis
 - \`GET /wallet/:address/balance\` — SOL balance + whale detection
@@ -115,12 +141,21 @@ Real-time Solana intelligence for AI agents. No UI, pure APIs.
 - \`GET /quote?from=SOL&to=USDC&amount=1\` — Get Jupiter swap quote
 
 ### Whale & Anomaly Detection
-- \`GET /whales/recent\` — Recent large transactions
-- \`POST /detect/anomaly\` — Analyze wallet for suspicious patterns
+- \`GET /whales/recent\` — Recent whale wallet activity
+- \`POST /detect/anomaly\` — Detect suspicious patterns (drains, bots, high failure rates)
 
 ## Example Usage
 
 \`\`\`bash
+# Get SOL price from Pyth oracle
+curl "https://solanascope.vercel.app/price/SOL%2FUSD"
+
+# Get all prices
+curl "https://solanascope.vercel.app/prices"
+
+# Get token metadata
+curl "https://solanascope.vercel.app/token/JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN/metadata"
+
 # Get swap quote
 curl "https://solanascope.vercel.app/quote?from=SOL&to=USDC&amount=10"
 
@@ -129,6 +164,11 @@ curl -X POST https://solanascope.vercel.app/detect/anomaly \\
   -H "Content-Type: application/json" \\
   -d '{"address": "WALLET_ADDRESS"}'
 \`\`\`
+
+## New in v0.3.0
+- **Pyth Oracle Integration** — Real-time prices with confidence intervals
+- **Token Metadata API** — Name, symbol, image, supply from Metaplex/Helius DAS
+- 9 price feeds: SOL, BTC, ETH, USDC, JUP, BONK, WIF, RAY, ORCA
 
 ## Built For
 Colosseum Agent Hackathon by clawdbot-prime (Agent #584).
@@ -451,6 +491,161 @@ Agents need data, not dashboards.
                      anomalies.some(a => a.severity === 'medium') ? 'medium' : 'low',
         timestamp: new Date().toISOString()
       });
+    }
+
+    // GET /prices - All Pyth oracle prices
+    if (path === '/prices') {
+      const feedIds = Object.values(PYTH_FEEDS).map(f => f.id);
+      const pythUrl = `https://hermes.pyth.network/v2/updates/price/latest?ids[]=${feedIds.join('&ids[]=')}`;
+      
+      try {
+        const pythRes = await fetch(pythUrl);
+        if (!pythRes.ok) throw new Error('Pyth API error');
+        const pythData: any = await pythRes.json();
+        
+        const prices: Record<string, { price: number; confidence: number; expo: number; publishTime: string }> = {};
+        
+        for (const priceData of pythData.parsed || []) {
+          const feedEntry = Object.entries(PYTH_FEEDS).find(([_, f]) => f.id === priceData.id);
+          if (feedEntry && priceData.price) {
+            const [pair] = feedEntry;
+            const rawPrice = Number(priceData.price.price);
+            const expo = priceData.price.expo;
+            const confidence = Number(priceData.price.conf);
+            prices[pair] = {
+              price: rawPrice * Math.pow(10, expo),
+              confidence: confidence * Math.pow(10, expo),
+              expo,
+              publishTime: new Date(priceData.price.publish_time * 1000).toISOString()
+            };
+          }
+        }
+        
+        return res.json({
+          source: 'pyth',
+          prices,
+          count: Object.keys(prices).length,
+          availablePairs: Object.keys(PYTH_FEEDS),
+          timestamp: new Date().toISOString()
+        });
+      } catch (e: any) {
+        return res.status(502).json({ error: 'Pyth oracle error', details: e.message });
+      }
+    }
+
+    // GET /price/:pair - Single Pyth price
+    if (segments[0] === 'price' && segments[1]) {
+      const pair = decodeURIComponent(segments[1]).toUpperCase();
+      const feed = PYTH_FEEDS[pair];
+      if (!feed) {
+        return res.status(404).json({ 
+          error: `Price feed not found: ${pair}`, 
+          availablePairs: Object.keys(PYTH_FEEDS) 
+        });
+      }
+
+      try {
+        const pythUrl = `https://hermes.pyth.network/v2/updates/price/latest?ids[]=${feed.id}`;
+        const pythRes = await fetch(pythUrl);
+        if (!pythRes.ok) throw new Error('Pyth API error');
+        const pythData: any = await pythRes.json();
+        
+        const priceData = pythData.parsed?.[0]?.price;
+        if (!priceData) throw new Error('No price data');
+        
+        const rawPrice = Number(priceData.price);
+        const expo = priceData.expo;
+        const confidence = Number(priceData.conf);
+        
+        return res.json({
+          pair,
+          source: 'pyth',
+          feedId: feed.id,
+          price: rawPrice * Math.pow(10, expo),
+          confidence: confidence * Math.pow(10, expo),
+          confidencePct: (confidence / rawPrice * 100).toFixed(4) + '%',
+          publishTime: new Date(priceData.publish_time * 1000).toISOString(),
+          timestamp: new Date().toISOString()
+        });
+      } catch (e: any) {
+        return res.status(502).json({ error: 'Pyth oracle error', details: e.message });
+      }
+    }
+
+    // GET /token/:mint/metadata - Token metadata
+    if (segments[0] === 'token' && segments[2] === 'metadata') {
+      const mint = segments[1];
+      
+      try {
+        const mintPubkey = new PublicKey(mint);
+        
+        // Derive metadata PDA
+        const [metadataPDA] = PublicKey.findProgramAddressSync(
+          [
+            Buffer.from('metadata'),
+            new PublicKey(TOKEN_METADATA_PROGRAM).toBuffer(),
+            mintPubkey.toBuffer()
+          ],
+          new PublicKey(TOKEN_METADATA_PROGRAM)
+        );
+        
+        const metadataAccount = await connection.getAccountInfo(metadataPDA);
+        
+        // Try DAS API as fallback for better metadata
+        const dasUrl = 'https://mainnet.helius-rpc.com/?api-key=15319bf4-5b40-4958-ac8d-6313aa55eb92';
+        const dasRes = await fetch(dasUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 'solanascope',
+            method: 'getAsset',
+            params: { id: mint }
+          })
+        });
+        
+        const dasData: any = await dasRes.json();
+        
+        if (dasData.result) {
+          const asset = dasData.result;
+          return res.json({
+            mint,
+            name: asset.content?.metadata?.name || null,
+            symbol: asset.content?.metadata?.symbol || null,
+            description: asset.content?.metadata?.description || null,
+            image: asset.content?.links?.image || asset.content?.files?.[0]?.uri || null,
+            decimals: asset.token_info?.decimals || null,
+            supply: asset.token_info?.supply ? Number(asset.token_info.supply) / Math.pow(10, asset.token_info.decimals || 0) : null,
+            owner: asset.ownership?.owner || null,
+            frozen: asset.ownership?.frozen || false,
+            metadataUri: asset.content?.json_uri || null,
+            attributes: asset.content?.metadata?.attributes || [],
+            verified: asset.creators?.some((c: any) => c.verified) || false,
+            source: 'helius-das',
+            timestamp: new Date().toISOString()
+          });
+        }
+        
+        // Fallback: basic on-chain check
+        const mintInfo = await connection.getParsedAccountInfo(mintPubkey);
+        if (mintInfo.value?.data && 'parsed' in mintInfo.value.data) {
+          const parsed = mintInfo.value.data.parsed;
+          return res.json({
+            mint,
+            decimals: parsed.info?.decimals,
+            supply: parsed.info?.supply ? Number(parsed.info.supply) / Math.pow(10, parsed.info.decimals || 0) : null,
+            freezeAuthority: parsed.info?.freezeAuthority || null,
+            mintAuthority: parsed.info?.mintAuthority || null,
+            hasMetadata: !!metadataAccount,
+            source: 'on-chain',
+            timestamp: new Date().toISOString()
+          });
+        }
+        
+        return res.status(404).json({ error: 'Token not found or invalid mint', mint });
+      } catch (e: any) {
+        return res.status(500).json({ error: 'Metadata lookup failed', details: e.message, mint });
+      }
     }
 
     return res.status(404).json({ error: 'Not found', path, availableEndpoints: '/health' });
