@@ -496,11 +496,12 @@ Agents need data, not dashboards.
     // GET /prices - All Pyth oracle prices
     if (path === '/prices') {
       const feedIds = Object.values(PYTH_FEEDS).map(f => f.id);
-      const pythUrl = `https://hermes.pyth.network/v2/updates/price/latest?ids[]=${feedIds.join('&ids[]=')}`;
+      const idsParam = feedIds.map(id => `ids[]=${id}`).join('&');
+      const pythUrl = `https://hermes.pyth.network/v2/updates/price/latest?${idsParam}`;
       
       try {
         const pythRes = await fetch(pythUrl);
-        if (!pythRes.ok) throw new Error('Pyth API error');
+        if (!pythRes.ok) throw new Error(`Pyth API error: ${pythRes.status}`);
         const pythData: any = await pythRes.json();
         
         const prices: Record<string, { price: number; confidence: number; expo: number; publishTime: string }> = {};
