@@ -543,77 +543,84 @@ Agents need data, not dashboards.
 
     // GET /arbitrage - Cross-DEX price comparison
     if (path === '/arbitrage') {
+      const opportunities: {
+        pair: string;
+        amount: number;
+        jupiterPrice: number;
+        pythPrice: number;
+        spreadPct: number;
+        route: string;
+      }[] = [];
+
+      let pythPrice: number | null = null;
+
+      // Get Pyth oracle price for SOL/USD
       try {
-        // Get prices from multiple sources to find discrepancies
-        const pairs = [
-          { from: 'SOL', to: 'USDC', amount: 1 },
-          { from: 'SOL', to: 'USDC', amount: 10 },
-          { from: 'SOL', to: 'USDC', amount: 100 }
-        ];
-
-        const opportunities: {
-          pair: string;
-          amount: number;
-          jupiterPrice: number;
-          pythPrice: number;
-          spreadPct: number;
-          route: string;
-        }[] = [];
-
-        // Get Pyth oracle price for SOL/USD
         const pythUrl = `https://hermes.pyth.network/v2/updates/price/latest?ids[]=${PYTH_FEEDS['SOL/USD'].id}`;
-        const pythRes = await fetch(pythUrl);
-        const pythData: any = await pythRes.json();
-        const pythPriceData = pythData.parsed?.[0]?.price;
-        const pythPrice = pythPriceData ? Number(pythPriceData.price) * Math.pow(10, pythPriceData.expo) : null;
+        const pythRes = await fetch(pythUrl, { signal: AbortSignal.timeout(5000) });
+        if (pythRes.ok) {
+          const pythData: any = await pythRes.json();
+          const pythPriceData = pythData.parsed?.[0]?.price;
+          pythPrice = pythPriceData ? Number(pythPriceData.price) * Math.pow(10, pythPriceData.expo) : null;
+        }
+      } catch {
+        // Pyth fetch failed, continue with null
+      }
 
-        // Compare with Jupiter quotes at different amounts
-        for (const pair of pairs) {
-          const fromToken = TOKENS[pair.from];
-          const toToken = TOKENS[pair.to];
-          const amountLamports = Math.floor(pair.amount * Math.pow(10, fromToken.decimals));
-          
+      if (!pythPrice) {
+        return res.status(502).json({ 
+          error: 'Could not fetch Pyth oracle price', 
+          timestamp: new Date().toISOString() 
+        });
+      }
+
+      // Compare with Jupiter quotes at different amounts
+      const amounts = [1, 10, 100];
+      const fromToken = TOKENS['SOL'];
+      const toToken = TOKENS['USDC'];
+
+      for (const amount of amounts) {
+        try {
+          const amountLamports = Math.floor(amount * Math.pow(10, fromToken.decimals));
           const jupiterUrl = `https://quote-api.jup.ag/v6/quote?inputMint=${fromToken.mint}&outputMint=${toToken.mint}&amount=${amountLamports}&slippageBps=50`;
-          const jupResponse = await fetch(jupiterUrl);
+          const jupResponse = await fetch(jupiterUrl, { signal: AbortSignal.timeout(5000) });
           
           if (jupResponse.ok) {
             const jupData: any = await jupResponse.json();
             const outAmount = Number(jupData.outAmount) / Math.pow(10, toToken.decimals);
-            const jupiterPrice = outAmount / pair.amount;
+            const jupiterPrice = outAmount / amount;
             
-            if (pythPrice) {
-              const spreadPct = ((jupiterPrice - pythPrice) / pythPrice) * 100;
-              const route = jupData.routePlan?.map((r: any) => r.swapInfo?.label).filter(Boolean).join(' → ') || 'direct';
-              
-              opportunities.push({
-                pair: `${pair.from}/${pair.to}`,
-                amount: pair.amount,
-                jupiterPrice: Number(jupiterPrice.toFixed(4)),
-                pythPrice: Number(pythPrice.toFixed(4)),
-                spreadPct: Number(spreadPct.toFixed(4)),
-                route
-              });
-            }
+            const spreadPct = ((jupiterPrice - pythPrice) / pythPrice) * 100;
+            const route = jupData.routePlan?.map((r: any) => r.swapInfo?.label).filter(Boolean).join(' → ') || 'direct';
+            
+            opportunities.push({
+              pair: 'SOL/USDC',
+              amount,
+              jupiterPrice: Number(jupiterPrice.toFixed(4)),
+              pythPrice: Number(pythPrice.toFixed(4)),
+              spreadPct: Number(spreadPct.toFixed(4)),
+              route
+            });
           }
+        } catch {
+          // Jupiter fetch failed for this amount, continue
         }
-
-        // Find significant spreads
-        const significantOpps = opportunities.filter(o => Math.abs(o.spreadPct) > 0.1);
-
-        return res.json({
-          timestamp: new Date().toISOString(),
-          oracleSource: 'pyth',
-          dexSource: 'jupiter',
-          opportunities,
-          significantOpportunities: significantOpps.length,
-          alert: significantOpps.length > 0 
-            ? `Found ${significantOpps.length} price discrepancy >0.1% between oracle and DEX`
-            : 'No significant arbitrage opportunities detected',
-          note: 'Negative spread = DEX price below oracle. Positive = DEX price above oracle.'
-        });
-      } catch (e: any) {
-        return res.status(500).json({ error: 'Arbitrage check failed', details: e.message });
       }
+
+      // Find significant spreads
+      const significantOpps = opportunities.filter(o => Math.abs(o.spreadPct) > 0.1);
+
+      return res.json({
+        timestamp: new Date().toISOString(),
+        oracleSource: 'pyth',
+        dexSource: 'jupiter',
+        opportunities,
+        significantOpportunities: significantOpps.length,
+        alert: significantOpps.length > 0 
+          ? `Found ${significantOpps.length} price discrepancy >0.1% between oracle and DEX`
+          : 'No significant arbitrage opportunities detected',
+        note: 'Negative spread = DEX price below oracle. Positive = DEX price above oracle.'
+      });
     }
 
     // GET /prices - All Pyth oracle prices
