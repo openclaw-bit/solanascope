@@ -495,29 +495,44 @@ Agents need data, not dashboards.
 
     // GET /prices - All Pyth oracle prices
     if (path === '/prices') {
-      const feedIds = Object.values(PYTH_FEEDS).map(f => f.id);
-      const idsParam = feedIds.map(id => `ids[]=${id}`).join('&');
-      const pythUrl = `https://hermes.pyth.network/v2/updates/price/latest?${idsParam}`;
-      
       try {
-        const pythRes = await fetch(pythUrl);
-        if (!pythRes.ok) throw new Error(`Pyth API error: ${pythRes.status}`);
-        const pythData: any = await pythRes.json();
+        const prices: Record<string, { price: number; confidence: number; confidencePct: string; publishTime: string }> = {};
         
-        const prices: Record<string, { price: number; confidence: number; expo: number; publishTime: string }> = {};
+        // Fetch all prices in parallel
+        const results = await Promise.all(
+          Object.entries(PYTH_FEEDS).map(async ([pair, feed]) => {
+            try {
+              const pythUrl = `https://hermes.pyth.network/v2/updates/price/latest?ids[]=${feed.id}`;
+              const pythRes = await fetch(pythUrl);
+              if (!pythRes.ok) return null;
+              const pythData: any = await pythRes.json();
+              const priceData = pythData.parsed?.[0]?.price;
+              if (!priceData) return null;
+              
+              const rawPrice = Number(priceData.price);
+              const expo = priceData.expo;
+              const confidence = Number(priceData.conf);
+              
+              return {
+                pair,
+                price: rawPrice * Math.pow(10, expo),
+                confidence: confidence * Math.pow(10, expo),
+                confidencePct: (confidence / rawPrice * 100).toFixed(4) + '%',
+                publishTime: new Date(priceData.publish_time * 1000).toISOString()
+              };
+            } catch {
+              return null;
+            }
+          })
+        );
         
-        for (const priceData of pythData.parsed || []) {
-          const feedEntry = Object.entries(PYTH_FEEDS).find(([_, f]) => f.id === priceData.id);
-          if (feedEntry && priceData.price) {
-            const [pair] = feedEntry;
-            const rawPrice = Number(priceData.price.price);
-            const expo = priceData.price.expo;
-            const confidence = Number(priceData.price.conf);
-            prices[pair] = {
-              price: rawPrice * Math.pow(10, expo),
-              confidence: confidence * Math.pow(10, expo),
-              expo,
-              publishTime: new Date(priceData.price.publish_time * 1000).toISOString()
+        for (const result of results) {
+          if (result) {
+            prices[result.pair] = {
+              price: result.price,
+              confidence: result.confidence,
+              confidencePct: result.confidencePct,
+              publishTime: result.publishTime
             };
           }
         }
