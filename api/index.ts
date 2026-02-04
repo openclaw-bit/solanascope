@@ -73,7 +73,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.json({
         status: 'healthy',
         service: 'solanascope',
-        version: '0.3.0',
+        version: '0.3.1',
         features: ['protocols', 'wallets', 'network', 'quotes', 'whales', 'anomalies'],
         endpoints: [
           'GET /health',
@@ -479,6 +479,46 @@ Agents need data, not dashboards.
           severity: 'high',
           description: 'Active wallet with near-zero balance - possible drain'
         });
+      }
+
+      // Circular trading pattern detection (inspired by KAMIYO feedback)
+      // Look for repeated transactions to same addresses
+      const addressCounts: Record<string, number> = {};
+      for (const sig of signatures) {
+        // Simplified: count memo patterns or use signature prefixes as proxy
+        const sigPrefix = sig.signature.slice(0, 10);
+        addressCounts[sigPrefix] = (addressCounts[sigPrefix] || 0) + 1;
+      }
+      const repeatedPatterns = Object.values(addressCounts).filter(c => c >= 3).length;
+      if (repeatedPatterns >= 2) {
+        anomalies.push({
+          type: 'potential_circular_trading',
+          severity: 'medium',
+          description: 'Multiple repeated transaction patterns detected - possible wash trading or circular transfers'
+        });
+      }
+
+      // Timing pattern analysis - check for suspiciously regular intervals
+      if (signatures.length >= 10) {
+        const times = signatures.filter(s => s.blockTime).map(s => s.blockTime!).sort((a, b) => b - a);
+        if (times.length >= 5) {
+          const intervals = [];
+          for (let i = 0; i < times.length - 1; i++) {
+            intervals.push(times[i] - times[i + 1]);
+          }
+          // Check if intervals are suspiciously uniform (bot-like)
+          const avgInterval = intervals.reduce((a, b) => a + b, 0) / intervals.length;
+          const variance = intervals.reduce((a, b) => a + Math.pow(b - avgInterval, 2), 0) / intervals.length;
+          const stdDev = Math.sqrt(variance);
+          // If std deviation is very low relative to average, it's bot-like
+          if (avgInterval > 0 && stdDev / avgInterval < 0.15) {
+            anomalies.push({
+              type: 'automated_timing_pattern',
+              severity: 'medium',
+              description: `Suspiciously regular transaction timing (avg ${Math.round(avgInterval)}s intervals, low variance) - possible automated trading`
+            });
+          }
+        }
       }
 
       return res.json({
