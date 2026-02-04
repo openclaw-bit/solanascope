@@ -33,6 +33,10 @@ const TOKENS: Record<string, { symbol: string; mint: string; decimals: number }>
 
 const WHALE_THRESHOLD = 10000; // SOL
 
+// Simple in-memory price history cache (samples last N price checks)
+const priceHistoryCache: Record<string, { price: number; confidence: number; timestamp: number }[]> = {};
+const MAX_HISTORY_SAMPLES = 20;
+
 // Pyth Price Feed IDs (Mainnet)
 const PYTH_FEEDS: Record<string, { id: string; pair: string }> = {
   'SOL/USD': { id: 'ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d', pair: 'SOL/USD' },
@@ -73,7 +77,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.json({
         status: 'healthy',
         service: 'solanascope',
-        version: '0.4.0',
+        version: '0.5.0',
         features: ['protocols', 'wallets', 'network', 'quotes', 'whales', 'anomalies'],
         endpoints: [
           'GET /health',
@@ -91,6 +95,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           'GET /price/:pair - Single price feed (SOL/USD, BTC/USD, etc)',
           'GET /token/:mint/metadata - Token metadata from Metaplex',
           'GET /arbitrage - Cross-DEX price opportunities',
+          'GET /price/:pair/history - Price confidence history',
           'GET /skill.md'
         ],
         timestamp: new Date().toISOString()
@@ -679,6 +684,91 @@ Agents need data, not dashboards.
       }
     }
 
+    // GET /price/:pair/history - Price confidence history
+    if (segments[0] === 'price' && segments[1] && segments[2] === 'history') {
+      const pair = decodeURIComponent(segments[1]).toUpperCase();
+      const feed = PYTH_FEEDS[pair];
+      if (!feed) {
+        return res.status(404).json({ 
+          error: `Price feed not found: ${pair}`, 
+          availablePairs: Object.keys(PYTH_FEEDS) 
+        });
+      }
+
+      // First, fetch current price to add to history
+      try {
+        const pythUrl = `https://hermes.pyth.network/v2/updates/price/latest?ids[]=${feed.id}`;
+        const pythRes = await fetch(pythUrl);
+        if (pythRes.ok) {
+          const pythData: any = await pythRes.json();
+          const priceData = pythData.parsed?.[0]?.price;
+          if (priceData) {
+            const rawPrice = Number(priceData.price);
+            const expo = priceData.expo;
+            const confidence = Number(priceData.conf);
+            
+            // Add to history cache
+            if (!priceHistoryCache[pair]) priceHistoryCache[pair] = [];
+            priceHistoryCache[pair].push({
+              price: rawPrice * Math.pow(10, expo),
+              confidence: confidence * Math.pow(10, expo),
+              timestamp: Date.now()
+            });
+            // Keep only last N samples
+            if (priceHistoryCache[pair].length > MAX_HISTORY_SAMPLES) {
+              priceHistoryCache[pair].shift();
+            }
+          }
+        }
+      } catch {
+        // Continue with existing history
+      }
+
+      const history = priceHistoryCache[pair] || [];
+      
+      // Calculate statistics
+      const confidences = history.map(h => h.confidence);
+      const avgConfidence = confidences.length > 0 
+        ? confidences.reduce((a, b) => a + b, 0) / confidences.length 
+        : 0;
+      const maxConfidence = Math.max(...confidences, 0);
+      const minConfidence = Math.min(...confidences, Infinity) === Infinity ? 0 : Math.min(...confidences);
+      
+      // Calculate variance and reliability score
+      const variance = confidences.length > 1
+        ? confidences.reduce((sum, c) => sum + Math.pow(c - avgConfidence, 2), 0) / confidences.length
+        : 0;
+      const stdDev = Math.sqrt(variance);
+      
+      // Reliability: lower confidence variance = more reliable
+      // Score 0-100 where 100 is most reliable
+      const latestPrice = history[history.length - 1]?.price || 0;
+      const reliabilityScore = latestPrice > 0 
+        ? Math.max(0, Math.min(100, 100 - (stdDev / latestPrice * 10000)))
+        : 0;
+
+      return res.json({
+        pair,
+        source: 'pyth',
+        samples: history.length,
+        history: history.map(h => ({
+          price: h.price,
+          confidence: h.confidence,
+          confidencePct: h.price > 0 ? (h.confidence / h.price * 100).toFixed(4) + '%' : '0%',
+          timestamp: new Date(h.timestamp).toISOString()
+        })),
+        statistics: {
+          avgConfidence: Number(avgConfidence.toFixed(6)),
+          maxConfidence: Number(maxConfidence.toFixed(6)),
+          minConfidence: Number(minConfidence.toFixed(6)),
+          stdDev: Number(stdDev.toFixed(6)),
+          reliabilityScore: Math.round(reliabilityScore)
+        },
+        note: 'History is collected from requests - more samples = better statistics. Reliability score: 100=stable, 0=volatile.',
+        timestamp: new Date().toISOString()
+      });
+    }
+
     // GET /price/:pair - Single Pyth price
     if (segments[0] === 'price' && segments[1]) {
       const pair = decodeURIComponent(segments[1]).toUpperCase();
@@ -702,13 +792,22 @@ Agents need data, not dashboards.
         const rawPrice = Number(priceData.price);
         const expo = priceData.expo;
         const confidence = Number(priceData.conf);
+        const price = rawPrice * Math.pow(10, expo);
+        const conf = confidence * Math.pow(10, expo);
+        
+        // Cache for history
+        if (!priceHistoryCache[pair]) priceHistoryCache[pair] = [];
+        priceHistoryCache[pair].push({ price, confidence: conf, timestamp: Date.now() });
+        if (priceHistoryCache[pair].length > MAX_HISTORY_SAMPLES) {
+          priceHistoryCache[pair].shift();
+        }
         
         return res.json({
           pair,
           source: 'pyth',
           feedId: feed.id,
-          price: rawPrice * Math.pow(10, expo),
-          confidence: confidence * Math.pow(10, expo),
+          price,
+          confidence: conf,
           confidencePct: (confidence / rawPrice * 100).toFixed(4) + '%',
           publishTime: new Date(priceData.publish_time * 1000).toISOString(),
           timestamp: new Date().toISOString()
