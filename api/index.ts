@@ -275,7 +275,7 @@ Agents need data, not dashboards.
         return res.status(502).json({ error: 'Jupiter API error', status: jupResponse.status });
       }
 
-      const jupData = await jupResponse.json();
+      const jupData: any = await jupResponse.json();
       
       const outAmount = Number(jupData.outAmount) / Math.pow(10, toToken.decimals);
       const priceImpact = Number(jupData.priceImpactPct);
